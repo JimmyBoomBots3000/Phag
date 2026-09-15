@@ -1,0 +1,115 @@
+Project image_tagger {
+  database_type: 'SQLite'
+  Note: '''
+    Initial schema for a single-user, self-hosted image tagging app.
+    Logical images are identified by content hash. File paths are separate
+    so tags can survive renames, moves, and duplicate file locations.
+  '''
+}
+
+Table indexed_roots {
+  id integer [pk]
+  path text [not null, unique]
+  recursive integer [not null, default: 1, note: 'Boolean: 0=false, 1=true']
+  enabled integer [not null, default: 1, note: 'Boolean: 0=false, 1=true']
+  created_at text [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at text [not null, default: `CURRENT_TIMESTAMP`]
+  last_scanned_at text
+}
+
+Table images {
+  id integer [pk]
+  content_hash text [not null]
+  hash_algorithm text [not null, default: 'sha256']
+  width integer
+  height integer
+  mime_type text [not null]
+  file_size_bytes integer [not null]
+  date_taken text
+  exif_json text
+  first_indexed_at text [not null, default: `CURRENT_TIMESTAMP`]
+  last_seen_at text [not null, default: `CURRENT_TIMESTAMP`]
+  created_at text [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at text [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (hash_algorithm, content_hash) [unique]
+    last_seen_at
+  }
+}
+
+Table file_locations {
+  id integer [pk]
+  image_id integer [not null, ref: > images.id]
+  root_id integer [not null, ref: > indexed_roots.id]
+  path text [not null]
+  path_relative text [not null]
+  file_size_bytes integer [not null]
+  modified_time text [not null]
+  created_time text
+  last_seen_at text [not null, default: `CURRENT_TIMESTAMP`]
+  orphaned_at text
+  created_at text [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at text [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (root_id, path_relative) [unique]
+    image_id
+    root_id
+    orphaned_at
+    (root_id, path_relative, file_size_bytes, modified_time)
+  }
+}
+
+Table tags {
+  id integer [pk]
+  display_name text [not null, note: 'Original casing preserved for display']
+  normalized_name text [not null, unique, note: 'Application-generated case-insensitive key']
+  created_at text [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at text [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    display_name
+  }
+}
+
+Table image_tags {
+  image_id integer [not null, ref: > images.id]
+  tag_id integer [not null, ref: > tags.id]
+  created_at text [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (image_id, tag_id) [pk]
+    tag_id
+  }
+}
+
+Table thumbnails {
+  id integer [pk]
+  image_id integer [not null, ref: > images.id]
+  size_name text [not null, note: 'small or medium']
+  path text [not null]
+  width integer [not null]
+  height integer [not null]
+  format text [not null]
+  generated_at text [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (image_id, size_name) [unique]
+    image_id
+  }
+}
+
+Table scan_events {
+  id integer [pk]
+  root_id integer [ref: > indexed_roots.id]
+  event_type text [not null]
+  path text
+  image_id integer [ref: > images.id]
+  details_json text
+  created_at text [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (root_id, created_at)
+  }
+}

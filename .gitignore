@@ -1,0 +1,38 @@
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+.venv/
+.uv-cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local app data
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+thumbnails/
+
+# Frontend
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Backend build artifacts
+backend/build/
+backend/dist/
+
+# Local environment overrides
+.env
+.env.*
+!.env.example
+.env.local
