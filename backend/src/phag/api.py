@@ -13,13 +13,27 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from phag.config import Settings, load_settings
-from phag.db import connect, init_database
+from phag.db import connect, ensure_database
 from phag.filesystem import list_directories
 from phag.images import get_active_image_path
-from phag.indexed_roots import add_indexed_root, disable_indexed_root, list_indexed_root_rows
+from phag.indexed_roots import (
+    add_indexed_root,
+    disable_indexed_root,
+    find_covered_roots,
+    find_covering_recursive_root,
+    list_indexed_root_rows,
+    update_indexed_root_recursive,
+)
 from phag.indexer import index_path, index_roots, purge_orphans
 from phag.library import list_library_images
-from phag.scan_jobs import enqueue_scan, get_scan_job, scan_job_to_dict
+from phag.scan_jobs import (
+    cancel_all_scan_jobs,
+    cancel_scan_job,
+    enqueue_scan,
+    get_scan_job,
+    list_scan_jobs,
+    scan_job_to_dict,
+)
 from phag.tags import (
     add_tag_to_image,
     create_tag,
@@ -36,8 +50,7 @@ from phag.tags import (
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Initialize application resources for the API lifespan."""
     settings = load_settings()
-    if not settings.db_path.exists():
-        init_database(settings.db_path)
+    ensure_database(settings.db_path)
     yield
 
 
@@ -58,6 +71,15 @@ class RootCreate(BaseModel):
     """Request body for creating an indexed root."""
 
     path: Path
+    recursive: bool = True
+    replace_covered_roots: bool = False
+
+
+class RootUpdate(BaseModel):
+    """Request body for updating indexed root scan options."""
+
+    recursive: bool
+    replace_covered_roots: bool = False
 
 
 class TagCreate(BaseModel):
@@ -112,7 +134,7 @@ def get_roots(
     with connect(settings.db_path) as connection:
         rows = list_indexed_root_rows(connection, include_disabled=include_disabled)
 
-    return [dict(row) for row in rows]
+        return [root_row_to_dict(row) for row in rows]
 
 
 @app.get("/filesystem/directories")
@@ -134,11 +156,55 @@ def get_directories(path: Path | None = None) -> DirectoryListingResponse:
 def create_root(root: RootCreate, settings: Settings = Depends(get_settings)) -> dict[str, object]:
     """Register a folder as an indexed root."""
     try:
-        root_id = add_indexed_root(settings.db_path, root.path)
+        root_id = add_indexed_root(
+            settings.db_path,
+            root.path,
+            recursive=root.recursive,
+            replace_covered_roots=root.replace_covered_roots,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise root_overlap_exception(settings.db_path, root.path, root.recursive, exc) from exc
 
-    return {"id": root_id, "path": str(root.path.expanduser().resolve())}
+    return {"id": root_id, "path": str(root.path.expanduser().resolve()), "recursive": root.recursive}
+
+
+@app.patch("/roots/{root_id}")
+def patch_root(root_id: int, root: RootUpdate, settings: Settings = Depends(get_settings)) -> dict[str, object]:
+    """Update scan options for an indexed root."""
+    with connect(settings.db_path) as connection:
+        root_row = connection.execute("""
+                                      SELECT id, path
+                                      FROM indexed_roots
+                                      WHERE id = ?
+                                      """,
+                                      (root_id,)).fetchone()
+        if root_row is None:
+            raise HTTPException(status_code=404, detail="Root not found")
+        try:
+            updated_count = update_indexed_root_recursive(
+                connection,
+                root_id,
+                root.recursive,
+                replace_covered_roots=root.replace_covered_roots,
+            )
+        except ValueError as exc:
+            raise root_overlap_exception(
+                settings.db_path,
+                Path(root_row["path"]),
+                root.recursive,
+                exc,
+                excluding_root_id=root_id,
+            ) from exc
+        if updated_count == 0:
+            raise HTTPException(status_code=404, detail="Root not found")
+        row = connection.execute("""
+                                 SELECT id, path, recursive, enabled, last_scanned_at
+                                 FROM indexed_roots
+                                 WHERE id = ?
+                                 """,
+                                 (root_id,)).fetchone()
+
+    return root_row_to_dict(row)
 
 
 @app.delete("/roots/{root_id}")
@@ -166,6 +232,7 @@ def create_scan(scan: ScanRequest, settings: Settings = Depends(get_settings)) -
         "skipped_count": summary.skipped_count,
         "orphaned_count": summary.orphaned_count,
         "thumbnail_count": summary.thumbnail_count,
+        "failed_count": summary.failed_count,
     }
 
 
@@ -176,6 +243,12 @@ def create_scan_job(scan: ScanRequest, settings: Settings = Depends(get_settings
     return scan_job_to_dict(job)
 
 
+@app.get("/scan-jobs")
+def get_scan_jobs() -> list[dict[str, object]]:
+    """Return all known scan jobs."""
+    return [scan_job_to_dict(job) for job in list_scan_jobs()]
+
+
 @app.get("/scan-jobs/{job_id}")
 def get_scan_job_status(job_id: str) -> dict[str, object]:
     """Return background scan job status."""
@@ -183,6 +256,25 @@ def get_scan_job_status(job_id: str) -> dict[str, object]:
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return scan_job_to_dict(job)
+
+
+@app.delete("/scan-jobs/{job_id}")
+def cancel_scan_job_request(job_id: str) -> dict[str, object]:
+    """Cancel one queued or running scan job."""
+    job = cancel_scan_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan job not found")
+    return scan_job_to_dict(job)
+
+
+@app.delete("/scan-jobs")
+def cancel_scan_jobs_request() -> dict[str, object]:
+    """Cancel all queued or running scan jobs."""
+    jobs, canceled_count = cancel_all_scan_jobs()
+    return {
+        "canceled_count": canceled_count,
+        "jobs": [scan_job_to_dict(job) for job in jobs],
+    }
 
 
 @app.post("/orphans/purge")
@@ -204,6 +296,7 @@ def purge_orphan_metadata(
 @app.get("/images")
 def get_images(
     tag: list[str] = Query(default=[]),
+    root_id: list[int] = Query(default=[]),
     include_untagged: bool = False,
     tag_match: str = "and",
     sort_by: str = "filename",
@@ -218,6 +311,7 @@ def get_images(
             images = list_library_images(
                 connection=connection,
                 tag_names=tag,
+                root_ids=root_id,
                 include_untagged=include_untagged,
                 tag_match=tag_match,
                 sort_by=sort_by,
@@ -317,13 +411,73 @@ def get_thumbnail(
     return FileResponse(path)
 
 
-@app.get("/originals/{image_id}")
-def get_original(image_id: int, settings: Settings = Depends(get_settings)) -> FileResponse:
+def root_row_to_dict(row: sqlite3.Row) -> dict[str, object]:
+    """Convert an indexed root database row to an API response."""
+    return {
+        "id": row["id"],
+        "path": row["path"],
+        "recursive": bool(row["recursive"]),
+        "enabled": bool(row["enabled"]),
+        "last_scanned_at": row["last_scanned_at"],
+    }
+
+
+def root_overlap_exception(
+    db_path: Path,
+    root_path: Path,
+    recursive: bool,
+    exc: ValueError,
+    excluding_root_id: int | None = None,
+) -> HTTPException:
+    """Convert root overlap validation errors to structured API errors."""
+    message = str(exc)
+    with connect(db_path) as connection:
+        if message.startswith("root_already_covered"):
+            covering_root = find_covering_recursive_root(
+                connection,
+                root_path.expanduser().resolve(),
+                excluding_root_id,
+            )
+            return HTTPException(
+                status_code=409,
+                detail={
+                    "code": "root_already_covered",
+                    "covering_root": root_overlap_to_dict(covering_root) if covering_root else None,
+                },
+            )
+        if message == "covered_roots_require_confirmation":
+            covered_roots = find_covered_roots(
+                connection,
+                root_path.expanduser().resolve(),
+                excluding_root_id,
+            ) if recursive else []
+            return HTTPException(
+                status_code=409,
+                detail={
+                    "code": "covered_roots_require_confirmation",
+                    "covered_roots": [root_overlap_to_dict(root) for root in covered_roots],
+                },
+            )
+
+    return HTTPException(status_code=400, detail=message)
+
+
+def root_overlap_to_dict(root: object) -> dict[str, object]:
+    """Convert a root overlap object to API error detail."""
+    return {
+        "id": root.id,
+        "path": str(root.path),
+        "recursive": root.recursive,
+    }
+
+
+@app.get("/images/{image_id}/file")
+def get_image_file(image_id: int, settings: Settings = Depends(get_settings)) -> FileResponse:
     """Serve one active source file for an indexed image."""
     with connect(settings.db_path) as connection:
         path = get_active_image_path(connection, image_id)
 
     if path is None or not Path(path).is_file():
-        raise HTTPException(status_code=404, detail="Original image not found")
+        raise HTTPException(status_code=404, detail="Image file not found")
 
     return FileResponse(path)

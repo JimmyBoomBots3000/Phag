@@ -3,14 +3,19 @@
     <aside class="sidebar">
       <section class="panel">
         <div class="app-title-row">
-          <h1>Phag</h1>
-          <button type="button" class="small-button" @click="openSettings">Settings</button>
+          <h1 class="logo-heading">
+            <PhagLogo class="brand-logo" />
+          </h1>
+          <div class="title-actions">
+            <button type="button" class="small-button" @click="openSettings">Settings</button>
+          </div>
         </div>
-        <p v-if="scanInProgress" class="muted">{{ scanStatusMessage }}</p>
+        <p v-if="scanStatusMessage" class="muted">{{ scanStatusMessage }}</p>
         <p v-if="scanSummary" class="muted">
           {{ scanSummary.discovered_count }} found,
           {{ scanSummary.indexed_count }} indexed,
-          {{ scanSummary.skipped_count }} skipped
+          {{ scanSummary.skipped_count }} skipped<template v-if="scanSummary.failed_count">,
+            {{ scanSummary.failed_count }} failed</template>
         </p>
       </section>
 
@@ -33,10 +38,26 @@
           <button type="button" class="small-button" :disabled="!hasTagFilters" @click="clearTagFilters">Clear</button>
         </div>
         <label class="tag-special-filter">
-          <input v-model="includeUntaggedFilter" type="checkbox" @change="reloadImages" />
+          <input v-model="includeUntaggedFilter" type="checkbox" @change="handleUntaggedFilterChange" />
           <span>Untagged</span>
         </label>
         <TagTree :nodes="tagTree" :selected-tags="selectedTagFilters" @toggle="toggleTagFilter" />
+      </section>
+
+      <section class="panel roots-panel">
+        <h2>Roots</h2>
+        <ul class="plain-list root-filter-list">
+          <li v-for="root in roots" :key="root.id">
+            <label class="root-filter-row">
+              <input
+                type="checkbox"
+                :checked="selectedRootFilters.includes(root.id)"
+                @change="toggleRootFilter(root.id)"
+              />
+              <span>{{ baseName(root.path) }}</span>
+            </label>
+          </li>
+        </ul>
       </section>
     </aside>
 
@@ -53,26 +74,29 @@
             <option value="date_taken">Taken</option>
             <option value="file_size">Size</option>
           </select>
-          <button type="button" @click="toggleSortDirection">{{ sortDirection.toUpperCase() }}</button>
-          <button type="button" @click="reloadAll">Refresh</button>
+          <button type="button" class="small-button" @click="toggleSortDirection">{{ sortDirection.toUpperCase() }}</button>
+          <button type="button" class="small-button" @click="reloadAll">Refresh</button>
         </div>
       </header>
 
       <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
 
-      <div class="image-grid">
-        <button
-          v-for="image in images"
-          :key="`${image.id}:${image.path}`"
-          type="button"
-          class="thumb"
-          :class="{ selected: isImageSelected(image.id) }"
-          @click="selectImage(image, $event)"
-        >
-          <img v-if="image.small_thumbnail_path" :src="assetUrl(image.small_thumbnail_path)" :alt="image.path_relative" />
-          <span v-else class="placeholder">No thumbnail</span>
-          <span class="filename">{{ image.path_relative }}</span>
-        </button>
+      <div class="image-grid-scroll">
+        <div class="image-grid">
+          <button
+            v-for="image in images"
+            :key="`${image.id}:${image.path}`"
+            type="button"
+            class="thumb"
+            :class="{ selected: isImageSelected(image.id) }"
+            @click="selectImage(image, $event)"
+            @dblclick="openImageFile(image)"
+          >
+            <img v-if="image.small_thumbnail_path" :src="assetUrl(image.small_thumbnail_path)" :alt="image.path_relative" />
+            <span v-else class="placeholder">No thumbnail</span>
+            <span class="filename">{{ image.path_relative }}</span>
+          </button>
+        </div>
       </div>
     </section>
 
@@ -93,33 +117,44 @@
           <datalist id="tag-suggestions">
             <option v-for="tag in tagSuggestions" :key="tag.id" :value="tag.display_name"></option>
           </datalist>
-          <button type="submit">Tag</button>
+          <button type="submit" class="small-button">Tag</button>
         </form>
 
-        <ul class="applied-tags">
-          <li v-for="tag in commonSelectedTags" :key="tag.id">
-            <span>{{ tag.display_name }}</span>
-            <button type="button" @click="handleRemoveCommonTag(tag.id)">Remove</button>
-          </li>
-          <li v-for="tag in partialSelectedTags" :key="tag.id" class="partial-tag">
-            <span>{{ tag.display_name }}</span>
-            <button type="button" class="tag-count-link" @click="selectImagesWithTag(tag)">
-              {{ tag.count }} of {{ selectedImages.length }}
-            </button>
-          </li>
-        </ul>
+        <section v-if="hasSelectedTags" class="applied-tag-section">
+          <div class="tag-bulk-actions">
+            <button type="button" class="small-button" @click="handleRemoveAllSelectedTags">Remove All</button>
+          </div>
+
+          <ul class="applied-tags">
+            <li v-for="tag in commonSelectedTags" :key="tag.id">
+              <span>{{ tag.display_name }}</span>
+              <button type="button" class="small-button" @click="handleRemoveCommonTag(tag.id)">Remove</button>
+            </li>
+            <li v-for="tag in partialSelectedTags" :key="tag.id" class="partial-tag">
+              <span>{{ tag.display_name }}</span>
+              <button type="button" class="tag-count-link" @click="selectImagesWithTag(tag)">
+                {{ tag.count }} of {{ selectedImages.length }}
+              </button>
+            </li>
+          </ul>
+        </section>
 
         <a
           v-if="hasSingleSelectedImage"
-          class="original-link"
-          :href="assetUrl(`originals/${selectedImage.id}`)"
+          class="image-file-link"
+          :href="assetUrl(`images/${selectedImage.id}/file`)"
           target="_blank"
           rel="noreferrer"
         >
-          Open Original
+          Open Image
         </a>
       </template>
-      <p v-else class="muted">Select an image</p>
+      <div v-else class="empty-details">
+        <p class="muted">Select one or more images</p>
+        <p class="selection-help">
+          Shift-click selects a range. {{ multiSelectClickLabel }} adds or removes individual images.
+        </p>
+      </div>
     </aside>
   </main>
 
@@ -131,6 +166,17 @@
       </header>
 
       <section class="settings-section">
+        <label class="settings-field">
+          <span>Appearance</span>
+          <select v-model="themePreference" @change="handleThemePreferenceChange">
+            <option value="system">Use system setting</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="settings-section">
         <div class="settings-heading-row">
           <h3>Library Roots</h3>
           <div class="settings-actions">
@@ -140,12 +186,36 @@
             </button>
           </div>
         </div>
-        <p v-if="scanInProgress" class="muted">{{ scanStatusMessage }}</p>
+        <p v-if="scanStatusMessage" class="muted">{{ scanStatusMessage }}</p>
+        <p v-if="settingsErrorMessage" class="modal-error">{{ settingsErrorMessage }}</p>
+        <div class="root-legend">
+          <span class="root-mode-badge recursive" aria-hidden="true">R</span>
+          <span>Scan subfolders recursively</span>
+        </div>
         <ul class="plain-list settings-root-list">
           <li v-for="root in roots" :key="root.id">
             <div class="root-row">
-              <span>{{ root.path }}</span>
+              <div class="root-main">
+                <span
+                  v-if="root.recursive"
+                  class="root-mode-badge recursive"
+                  aria-label="Scan subfolders recursively"
+                  title="Scan subfolders recursively"
+                >
+                  R
+                </span>
+                <span class="root-path">{{ root.path }}</span>
+              </div>
               <div class="settings-actions">
+                <label class="inline-check">
+                  <input
+                    type="checkbox"
+                    :checked="root.recursive"
+                    :disabled="busy || scanInProgress"
+                    @change="handleRootRecursiveChange(root, $event)"
+                  />
+                  <span>Scan subfolders recursively</span>
+                </label>
                 <button
                   type="button"
                   class="small-button"
@@ -167,6 +237,38 @@
           </li>
         </ul>
       </section>
+
+      <section v-if="activeScanJobs.length" class="settings-section">
+        <div class="settings-heading-row">
+          <h3>Scans</h3>
+          <button
+            type="button"
+            class="small-button"
+            :disabled="busy || !hasCancelableScans"
+            @click="handleCancelAllScans"
+          >
+            Cancel All
+          </button>
+        </div>
+        <ul class="plain-list scan-job-list">
+          <li v-for="job in activeScanJobs" :key="job.id">
+            <div class="scan-job-row">
+              <div class="scan-job-main">
+                <span class="scan-job-status">{{ scanJobLabel(job) }}</span>
+                <span class="scan-job-path">{{ job.current_path ?? job.root_path ?? "All roots" }}</span>
+              </div>
+              <button
+                type="button"
+                class="small-button"
+                :disabled="busy || !isCancelableScan(job)"
+                @click="handleCancelScan(job)"
+              >
+                Cancel
+              </button>
+            </div>
+          </li>
+        </ul>
+      </section>
     </section>
   </div>
 
@@ -176,16 +278,24 @@
         <h2>Select Root Folder</h2>
         <button type="button" class="small-button" @click="rootChooserOpen = false">Close</button>
       </header>
+      <p v-if="rootChooserErrorMessage" class="modal-error">{{ rootChooserErrorMessage }}</p>
       <div class="chooser-path">{{ directoryListing?.path }}</div>
+      <label class="option-row">
+        <input v-model="rootChooserRecursive" type="checkbox" />
+        <span>Include subfolders</span>
+      </label>
       <div class="chooser-actions">
         <button
           type="button"
+          class="small-button"
           :disabled="!directoryListing?.parent_path"
           @click="browseDirectory(directoryListing?.parent_path ?? undefined)"
         >
           Up
         </button>
-        <button type="button" :disabled="!directoryListing" @click="handleAddSelectedRoot">Add This Folder</button>
+        <button type="button" class="small-button" :disabled="!directoryListing" @click="handleAddSelectedRoot">
+          Add This Folder
+        </button>
       </div>
       <ul class="directory-list">
         <li v-for="directory in directoryListing?.directories ?? []" :key="directory">
@@ -207,8 +317,8 @@
         <li v-for="tag in tags" :key="tag.id">
           <form v-if="editingTagId === tag.id" class="tag-manager-row" @submit.prevent="handleRenameTag(tag)">
             <input v-model="editingTagName" />
-            <button type="submit">Save</button>
-            <button type="button" @click="cancelTagRename">Cancel</button>
+            <button type="submit" class="small-button">Save</button>
+            <button type="button" class="small-button" @click="cancelTagRename">Cancel</button>
           </form>
           <div v-else class="tag-manager-row">
             <span>{{ tag.display_name }}</span>
@@ -224,22 +334,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
   addRoot,
+  ApiError,
   assetUrl,
+  cancelAllScanJobs,
+  cancelScanJob,
   deleteTag,
   getScanJob,
   listImageTags,
   listImages,
   listDirectories,
   listRoots,
+  listScanJobs,
   listTags,
   queueScan,
   renameTag,
   removeRoot,
   tagImage,
   untagImage,
+  updateRootRecursive,
   type IndexedRoot,
   type DirectoryListing,
   type LibraryImage,
@@ -247,15 +362,24 @@ import {
   type ScanSummary,
   type Tag
 } from "./api";
+import PhagLogo from "./components/PhagLogo.vue";
 import TagTree, { type TagTreeNode } from "./components/TagTree.vue";
 
 type SortBy = "filename" | "date_modified" | "date_taken" | "file_size";
 type SortDirection = "asc" | "desc";
 type TagMatch = "and" | "or";
+type ThemeMode = "light" | "dark";
+type ThemePreference = ThemeMode | "system";
 
 interface SelectedTagSummary extends Tag {
   count: number;
   imageIds: number[];
+}
+
+interface RootOverlapDetail {
+  code: "root_already_covered" | "covered_roots_require_confirmation";
+  covering_root?: { id: number; path: string; recursive: boolean } | null;
+  covered_roots?: { id: number; path: string; recursive: boolean }[];
 }
 
 const roots = ref<IndexedRoot[]>([]);
@@ -265,10 +389,14 @@ const selectedImage = ref<LibraryImage | null>(null);
 const selectedImageIds = ref<Set<number>>(new Set());
 const selectedTagSummaries = ref<SelectedTagSummary[]>([]);
 const selectedTagFilters = ref<string[]>([]);
+const selectedRootFilters = ref<number[]>([]);
 const includeUntaggedFilter = ref(false);
 const newTagName = ref("");
 const settingsOpen = ref(false);
 const rootChooserOpen = ref(false);
+const rootChooserRecursive = ref(true);
+const rootChooserErrorMessage = ref("");
+const settingsErrorMessage = ref("");
 const directoryListing = ref<DirectoryListing | null>(null);
 const tagManagerOpen = ref(false);
 const editingTagId = ref<number | null>(null);
@@ -276,18 +404,24 @@ const editingTagName = ref("");
 const tagMatch = ref<TagMatch>("and");
 const sortBy = ref<SortBy>("filename");
 const sortDirection = ref<SortDirection>("asc");
-const activeScanJob = ref<ScanJob | null>(null);
+const scanJobs = ref<ScanJob[]>([]);
+const latestFinishedScanJob = ref<ScanJob | null>(null);
 const scanSummary = ref<ScanSummary | null>(null);
 const errorMessage = ref("");
 const busy = ref(false);
+const themePreference = ref<ThemePreference>(initialThemePreference());
+const systemThemeMode = ref<ThemeMode>(getSystemThemeMode());
 
 const tagTree = computed(() => buildTagTree(tags.value));
 const tagSuggestions = computed(() =>
   tags.value.filter((tag) => !commonSelectedTags.value.some((selectedTag) => selectedTag.id === tag.id))
 );
+const multiSelectClickLabel = computed(() => isMacPlatform() ? "⌘-click" : "Ctrl-click");
 const hasTagFilters = computed(() => selectedTagFilters.value.length > 0 || includeUntaggedFilter.value);
+const hasRootFilters = computed(() => selectedRootFilters.value.length > 0);
 const selectedImages = computed(() => images.value.filter((image) => selectedImageIds.value.has(image.id)));
 const hasSingleSelectedImage = computed(() => selectedImages.value.length === 1);
+const hasSelectedTags = computed(() => selectedTagSummaries.value.length > 0);
 const commonSelectedTags = computed(() =>
   selectedTagSummaries.value.filter((tag) => tag.count === selectedImages.value.length)
 );
@@ -297,16 +431,27 @@ const partialSelectedTags = computed(() =>
 const detailTitle = computed(() =>
   selectedImages.value.length > 1 ? `${selectedImages.value.length} images selected` : selectedImage.value?.path_relative
 );
-const scanInProgress = computed(
-  () => activeScanJob.value?.status === "queued" || activeScanJob.value?.status === "running"
-);
+const activeScanJobs = computed(() => scanJobs.value.filter(isActiveScan));
+const latestScanJob = computed(() => activeScanJobs.value[0] ?? latestFinishedScanJob.value);
+const scanInProgress = computed(() => activeScanJobs.value.length > 0);
+const hasCancelableScans = computed(() => scanJobs.value.some(isCancelableScan));
 const scanStatusMessage = computed(() => {
-  if (!activeScanJob.value) return "";
-  const path = activeScanJob.value.current_path ?? activeScanJob.value.root_path;
-  if (activeScanJob.value.status === "queued") {
+  const job = latestScanJob.value;
+  if (!job) return "";
+  const path = job.current_path ?? job.root_path;
+  if (job.status === "queued") {
     return path ? `Scan queued: ${path}` : "Scan queued";
   }
-  return path ? `Scanning: ${path}` : "Scan running";
+  if (job.status === "running") {
+    return path ? `Scanning: ${path}` : "Scan running";
+  }
+  if (job.status === "canceling") {
+    return path ? `Canceling scan: ${path}` : "Canceling scan";
+  }
+  if (job.status === "canceled") {
+    return path ? `Scan canceled: ${path}` : "Scan canceled";
+  }
+  return "";
 });
 
 async function withErrors(work: () => Promise<void>): Promise<void> {
@@ -321,12 +466,58 @@ async function withErrors(work: () => Promise<void>): Promise<void> {
   }
 }
 
+async function withRootChooserErrors(work: () => Promise<void>): Promise<void> {
+  rootChooserErrorMessage.value = "";
+  busy.value = true;
+  try {
+    await work();
+  } catch (error) {
+    rootChooserErrorMessage.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function withSettingsErrors(work: () => Promise<void>): Promise<void> {
+  settingsErrorMessage.value = "";
+  busy.value = true;
+  try {
+    await work();
+  } catch (error) {
+    settingsErrorMessage.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function reloadAll(): Promise<void> {
   await withErrors(loadLibraryState);
 }
 
+async function loadInitialState(): Promise<void> {
+  busy.value = true;
+  for (let attempt = 1; attempt <= 30; attempt += 1) {
+    try {
+      errorMessage.value = attempt === 1 ? "Starting backend..." : errorMessage.value;
+      await loadLibraryState();
+      errorMessage.value = "";
+      busy.value = false;
+      return;
+    } catch (error) {
+      if (attempt === 30) {
+        errorMessage.value = error instanceof Error ? error.message : String(error);
+        busy.value = false;
+        return;
+      }
+      await delay(500);
+    }
+  }
+}
+
 async function loadLibraryState(): Promise<void> {
   roots.value = await listRoots();
+  const knownJobs = await listScanJobs();
+  scanJobs.value = knownJobs.filter(isActiveScan);
   tags.value = await listTags();
   await reloadImages();
 }
@@ -334,6 +525,7 @@ async function loadLibraryState(): Promise<void> {
 async function reloadImages(): Promise<void> {
   images.value = await listImages({
     tags: selectedTagFilters.value,
+    rootIds: selectedRootFilters.value,
     includeUntagged: includeUntaggedFilter.value,
     tagMatch: tagMatch.value,
     sortBy: sortBy.value,
@@ -364,17 +556,56 @@ async function selectImage(image: LibraryImage, event: MouseEvent): Promise<void
   await withErrors(loadSelectedTagSummaries);
 }
 
+function openImageFile(image: LibraryImage): void {
+  window.open(assetUrl(`images/${image.id}/file`), "_blank", "noreferrer");
+}
+
+function isMacPlatform(): boolean {
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+}
+
 async function openRootChooser(): Promise<void> {
   rootChooserOpen.value = true;
+  rootChooserRecursive.value = true;
+  rootChooserErrorMessage.value = "";
   await browseDirectory();
 }
 
 function openSettings(): void {
+  settingsErrorMessage.value = "";
   settingsOpen.value = true;
 }
 
+function handleThemePreferenceChange(): void {
+  setThemePreference(themePreference.value);
+}
+
+function setThemePreference(preference: ThemePreference): void {
+  themePreference.value = preference;
+  localStorage.setItem("phag-theme", preference);
+  applyThemePreference(preference);
+}
+
+function initialThemePreference(): ThemePreference {
+  const savedTheme = localStorage.getItem("phag-theme");
+  if (savedTheme === "light" || savedTheme === "dark" || savedTheme === "system") return savedTheme;
+  return "system";
+}
+
+function getSystemThemeMode(): ThemeMode {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyThemePreference(preference: ThemePreference): void {
+  if (preference === "system") {
+    delete document.documentElement.dataset.theme;
+    return;
+  }
+  document.documentElement.dataset.theme = preference;
+}
+
 async function browseDirectory(path?: string): Promise<void> {
-  await withErrors(async () => {
+  await withRootChooserErrors(async () => {
     directoryListing.value = await listDirectories(path);
   });
 }
@@ -382,8 +613,9 @@ async function browseDirectory(path?: string): Promise<void> {
 async function handleAddSelectedRoot(): Promise<void> {
   const path = directoryListing.value?.path;
   if (!path) return;
-  await withErrors(async () => {
-    await addRoot(path);
+  await withRootChooserErrors(async () => {
+    const added = await addRootWithOverlapConfirmation(path, rootChooserRecursive.value);
+    if (!added) return;
     rootChooserOpen.value = false;
     await loadLibraryState();
     await startQueuedScan(path);
@@ -391,23 +623,96 @@ async function handleAddSelectedRoot(): Promise<void> {
 }
 
 async function handleScanAll(): Promise<void> {
-  await withErrors(async () => {
+  await withSettingsErrors(async () => {
     await startQueuedScan();
   });
 }
 
 async function handleScanRoot(path: string): Promise<void> {
-  await withErrors(async () => {
+  await withSettingsErrors(async () => {
     await startQueuedScan(path);
   });
 }
 
 async function handleRemoveRoot(rootId: number): Promise<void> {
-  await withErrors(async () => {
+  await withSettingsErrors(async () => {
     await removeRoot(rootId);
     await loadLibraryState();
     await startQueuedScan();
   });
+}
+
+async function handleRootRecursiveChange(root: IndexedRoot, event: Event): Promise<void> {
+  const checkbox = event.target as HTMLInputElement;
+  const nextRecursive = checkbox.checked;
+  if (nextRecursive === root.recursive) return;
+
+  const confirmed = window.confirm("Changing this root setting will rescan the folder now. Continue?");
+  if (!confirmed) {
+    checkbox.checked = root.recursive;
+    return;
+  }
+
+  await withSettingsErrors(async () => {
+    const updated = await updateRootRecursiveWithOverlapConfirmation(root, nextRecursive);
+    if (!updated) {
+      checkbox.checked = root.recursive;
+      return;
+    }
+    await loadLibraryState();
+    await startQueuedScan(root.path);
+  });
+}
+
+async function addRootWithOverlapConfirmation(path: string, recursive: boolean): Promise<boolean> {
+  try {
+    await addRoot(path, recursive);
+    return true;
+  } catch (error) {
+    const detail = rootOverlapDetail(error);
+    if (detail?.code === "covered_roots_require_confirmation") {
+      const confirmed = window.confirm(replaceCoveredRootsMessage(detail.covered_roots ?? []));
+      if (!confirmed) return false;
+      await addRoot(path, recursive, true);
+      return true;
+    }
+    if (detail?.code === "root_already_covered") {
+      throw new Error(`This folder is already covered by recursive root ${detail.covering_root?.path ?? ""}`.trim());
+    }
+    throw error;
+  }
+}
+
+async function updateRootRecursiveWithOverlapConfirmation(root: IndexedRoot, recursive: boolean): Promise<boolean> {
+  try {
+    await updateRootRecursive(root.id, recursive);
+    return true;
+  } catch (error) {
+    const detail = rootOverlapDetail(error);
+    if (detail?.code === "covered_roots_require_confirmation") {
+      const confirmed = window.confirm(replaceCoveredRootsMessage(detail.covered_roots ?? []));
+      if (!confirmed) return false;
+      await updateRootRecursive(root.id, recursive, true);
+      return true;
+    }
+    if (detail?.code === "root_already_covered") {
+      throw new Error(`This folder is already covered by recursive root ${detail.covering_root?.path ?? ""}`.trim());
+    }
+    throw error;
+  }
+}
+
+function toggleRootFilter(rootId: number): void {
+  selectedTagFilters.value = [];
+  includeUntaggedFilter.value = false;
+
+  if (selectedRootFilters.value.includes(rootId)) {
+    selectedRootFilters.value = selectedRootFilters.value.filter((selectedRootId) => selectedRootId !== rootId);
+  } else {
+    selectedRootFilters.value = [...selectedRootFilters.value, rootId];
+  }
+
+  void reloadImages();
 }
 
 async function handleTagSelectedImage(): Promise<void> {
@@ -429,6 +734,19 @@ async function handleRemoveCommonTag(tagId: number): Promise<void> {
   await withErrors(async () => {
     for (const imageId of imageIds) {
       await untagImage(imageId, tagId);
+    }
+    await refreshTagsAndImages();
+  });
+}
+
+async function handleRemoveAllSelectedTags(): Promise<void> {
+  if (!selectedTagSummaries.value.length) return;
+  if (!window.confirm("Remove all tags from the selected image(s)?")) return;
+  await withErrors(async () => {
+    for (const tag of selectedTagSummaries.value) {
+      for (const imageId of tag.imageIds) {
+        await untagImage(imageId, tag.id);
+      }
     }
     await refreshTagsAndImages();
   });
@@ -521,31 +839,137 @@ function toggleSortDirection(): void {
 }
 
 async function startQueuedScan(rootPath?: string): Promise<void> {
-  activeScanJob.value = await queueScan(rootPath);
-  void pollScanJob(activeScanJob.value.id);
+  scanJobs.value = scanJobs.value.filter(isActiveScan);
+  latestFinishedScanJob.value = null;
+  const job = await queueScan(rootPath);
+  upsertScanJob(job);
+  void pollScanJob(job.id);
 }
 
 async function pollScanJob(jobId: string): Promise<void> {
   try {
-    while (activeScanJob.value?.id === jobId) {
+    while (isActiveScan(findScanJob(jobId))) {
       await delay(1000);
       const job = await getScanJob(jobId);
-      if (activeScanJob.value?.id !== jobId) return;
-
-      activeScanJob.value = job;
+      upsertScanJob(job);
       if (job.status === "completed") {
+        latestFinishedScanJob.value = job;
         scanSummary.value = job.summary;
+        removeScanJob(job.id);
         await loadLibraryState();
         return;
       }
       if (job.status === "failed") {
-        errorMessage.value = job.error ?? "Scan failed";
+        latestFinishedScanJob.value = job;
+        removeScanJob(job.id);
+        reportScanError(job.error ?? "Scan failed");
+        return;
+      }
+      if (job.status === "canceled") {
+        latestFinishedScanJob.value = job;
+        removeScanJob(job.id);
+        await loadLibraryState();
         return;
       }
     }
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : String(error);
+    reportScanError(error instanceof Error ? error.message : String(error));
   }
+}
+
+async function handleCancelScan(job: ScanJob): Promise<void> {
+  if (!isCancelableScan(job)) return;
+  await withSettingsErrors(async () => {
+    const canceledJob = await cancelScanJob(job.id);
+    upsertScanJob(canceledJob);
+    if (canceledJob.status === "canceled") {
+      latestFinishedScanJob.value = canceledJob;
+      removeScanJob(canceledJob.id);
+      await loadLibraryState();
+    }
+  });
+}
+
+async function handleCancelAllScans(): Promise<void> {
+  await withSettingsErrors(async () => {
+    const response = await cancelAllScanJobs();
+    for (const job of response.jobs) {
+      if (isActiveScan(job)) {
+        upsertScanJob(job);
+      } else {
+        latestFinishedScanJob.value = job.status === "canceled" ? job : latestFinishedScanJob.value;
+        removeScanJob(job.id);
+      }
+    }
+    await loadLibraryState();
+  });
+}
+
+function reportScanError(message: string): void {
+  if (settingsOpen.value) {
+    settingsErrorMessage.value = message;
+  } else {
+    errorMessage.value = message;
+  }
+}
+
+function upsertScanJob(job: ScanJob): void {
+  const index = scanJobs.value.findIndex((existingJob) => existingJob.id === job.id);
+  if (index === -1) {
+    scanJobs.value = [job, ...scanJobs.value];
+    return;
+  }
+
+  const nextJobs = [...scanJobs.value];
+  nextJobs[index] = job;
+  scanJobs.value = nextJobs;
+}
+
+function findScanJob(jobId: string): ScanJob | null {
+  return scanJobs.value.find((job) => job.id === jobId) ?? null;
+}
+
+function removeScanJob(jobId: string): void {
+  scanJobs.value = scanJobs.value.filter((job) => job.id !== jobId);
+}
+
+function isActiveScan(job: ScanJob | null): boolean {
+  return job?.status === "queued" || job?.status === "running" || job?.status === "canceling";
+}
+
+function isCancelableScan(job: ScanJob | null): boolean {
+  return job?.status === "queued" || job?.status === "running";
+}
+
+function scanJobLabel(job: ScanJob): string {
+  switch (job.status) {
+    case "queued":
+      return "Queued";
+    case "running":
+      return "Running";
+    case "canceling":
+      return "Canceling";
+    case "canceled":
+      return "Canceled";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+  }
+  return job.status;
+}
+
+function rootOverlapDetail(error: unknown): RootOverlapDetail | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  if (!error.detail || typeof error.detail !== "object") return null;
+  const detail = error.detail as Partial<RootOverlapDetail>;
+  if (detail.code !== "root_already_covered" && detail.code !== "covered_roots_require_confirmation") return null;
+  return detail as RootOverlapDetail;
+}
+
+function replaceCoveredRootsMessage(coveredRoots: { path: string }[]): string {
+  const paths = coveredRoots.map((root) => root.path).join("\n");
+  return `This folder contains existing library roots. Replace them with this parent folder and rescan?\n\n${paths}`;
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -588,12 +1012,18 @@ function pruneMissingSelections(): void {
 }
 
 function toggleTagFilter(tagName: string): void {
+  selectedRootFilters.value = [];
   const index = selectedTagFilters.value.indexOf(tagName);
   if (index >= 0) {
     selectedTagFilters.value.splice(index, 1);
   } else {
     selectedTagFilters.value.push(tagName);
   }
+  void reloadImages();
+}
+
+function handleUntaggedFilterChange(): void {
+  selectedRootFilters.value = [];
   void reloadImages();
 }
 
@@ -672,5 +1102,17 @@ function sortTagTree(nodes: TagTreeNode[]): void {
   }
 }
 
-onMounted(reloadAll);
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const handleSystemThemeChange = (): void => {
+  systemThemeMode.value = getSystemThemeMode();
+};
+
+applyThemePreference(themePreference.value);
+onMounted(() => {
+  systemThemeQuery.addEventListener("change", handleSystemThemeChange);
+  void loadInitialState();
+});
+onUnmounted(() => {
+  systemThemeQuery.removeEventListener("change", handleSystemThemeChange);
+});
 </script>

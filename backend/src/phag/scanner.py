@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PIL import Image, ExifTags
+from PIL import Image, ImageFile, ExifTags
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -42,18 +44,19 @@ def timestamp_to_utc_iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
 
 
-def iter_image_files(root_path: Path) -> Iterator[Path]:
-    """Yield supported image files under a root folder recursively."""
+def iter_image_files(root_path: Path, recursive: bool = True) -> Iterator[Path]:
+    """Yield supported image files under a root folder."""
     root_path = root_path.expanduser().resolve()
 
-    for path in root_path.rglob("*"):
+    paths = root_path.rglob("*") if recursive else root_path.iterdir()
+    for path in paths:
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
             yield path
 
 
-def discover_images(root_path: Path) -> Iterator[DiscoveredImage]:
+def discover_images(root_path: Path, recursive: bool = True) -> Iterator[DiscoveredImage]:
     """Yield supported image files with cheap filesystem metadata."""
-    for path in iter_image_files(root_path):
+    for path in iter_image_files(root_path, recursive=recursive):
         stat = path.stat()
         yield DiscoveredImage(
             path=path,
@@ -107,7 +110,7 @@ def scan_discovered_image(image: DiscoveredImage) -> ScannedImage:
     )
 
 
-def scan_images(root_path: Path) -> Iterator[ScannedImage]:
+def scan_images(root_path: Path, recursive: bool = True) -> Iterator[ScannedImage]:
     """Yield supported image files with metadata and content hashes."""
-    for image in discover_images(root_path):
+    for image in discover_images(root_path, recursive=recursive):
         yield scan_discovered_image(image)

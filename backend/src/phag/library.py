@@ -37,6 +37,7 @@ SORT_COLUMNS = {
 def list_library_images(
     connection: sqlite3.Connection,
     tag_names: list[str] | None = None,
+    root_ids: list[int] | None = None,
     include_untagged: bool = False,
     tag_match: str = "and",
     sort_by: str = "filename",
@@ -46,7 +47,9 @@ def list_library_images(
 ) -> list[LibraryImage]:
     """Return active library images with optional tag filtering and sorting."""
     tag_names = tag_names or []
+    root_ids = root_ids or []
     normalized_tags = [normalize_tag_name(tag_name) for tag_name in tag_names]
+    normalized_tag_patterns = [f"{tag_name}/%" for tag_name in normalized_tags]
     sort_column = SORT_COLUMNS.get(sort_by)
     if sort_column is None:
         raise ValueError(f"Unsupported sort field: {sort_by}")
@@ -57,6 +60,10 @@ def list_library_images(
 
     params: list[object] = []
     where = ["file_locations.orphaned_at IS NULL"]
+    if root_ids:
+        root_placeholders = ", ".join("?" for _ in root_ids)
+        where.append(f"file_locations.root_id IN ({root_placeholders})")
+        params.extend(root_ids)
 
     untagged_filter = """
         NOT EXISTS (
@@ -67,9 +74,14 @@ def list_library_images(
     """
 
     if normalized_tags:
-        placeholders = ", ".join("?" for _ in normalized_tags)
+        tag_clauses = " OR ".join("tags.normalized_name = ? OR tags.normalized_name LIKE ?" for _ in normalized_tags)
+        tag_params = [
+            value
+            for tag_name, tag_pattern in zip(normalized_tags, normalized_tag_patterns)
+            for value in (tag_name, tag_pattern)
+        ]
         if tag_match == "or":
-            params.extend(normalized_tags)
+            params.extend(tag_params)
             where.append(
                 f"""
                 (
@@ -77,7 +89,7 @@ def list_library_images(
                         SELECT image_tags.image_id
                         FROM image_tags
                         JOIN tags ON tags.id = image_tags.tag_id
-                        WHERE tags.normalized_name IN ({placeholders})
+                        WHERE {tag_clauses}
                     )
                     {"OR " + untagged_filter if include_untagged else ""}
                 )
@@ -86,16 +98,21 @@ def list_library_images(
         elif include_untagged:
             where.append("0 = 1")
         else:
-            params.extend(normalized_tags)
+            match_params = [
+                value
+                for tag_name, tag_pattern in zip(normalized_tags, normalized_tag_patterns)
+                for value in (tag_name, tag_name, tag_pattern)
+            ]
+            params.extend(match_params)
             where.append(
                 f"""
                 images.id IN (
-                    SELECT image_tags.image_id
-                    FROM image_tags
-                    JOIN tags ON tags.id = image_tags.tag_id
-                    WHERE tags.normalized_name IN ({placeholders})
-                    GROUP BY image_tags.image_id
-                    HAVING COUNT(DISTINCT tags.normalized_name) = ?
+                    SELECT matched_tags.image_id
+                    FROM (
+                        {tag_filter_matches_sql(normalized_tags)}
+                    ) AS matched_tags
+                    GROUP BY matched_tags.image_id
+                    HAVING COUNT(DISTINCT matched_filter) = ?
                 )
                 """
             )
@@ -153,3 +170,16 @@ def list_library_images(
         )
         for row in rows
     ]
+
+
+def tag_filter_matches_sql(normalized_tags: list[str]) -> str:
+    """Return SQL that maps each selected filter to matching image ids."""
+    return "\nUNION ALL\n".join(
+        """
+        SELECT image_tags.image_id, ? AS matched_filter
+        FROM image_tags
+        JOIN tags ON tags.id = image_tags.tag_id
+        WHERE tags.normalized_name = ? OR tags.normalized_name LIKE ?
+        """
+        for _ in normalized_tags
+    )

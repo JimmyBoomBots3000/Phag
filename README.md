@@ -1,7 +1,7 @@
 # Phag Test Setup
 
 Phag is a local photo tagging app. For this test version, it runs like a small
-developer project instead of a normal installed Windows app.
+developer project instead of a normal installed app.
 
 You will run two pieces at the same time:
 
@@ -28,15 +28,26 @@ Install these first:
    - Use the LTS version, not the Current version.
 
 4. Git
-   - https://git-scm.com/download/win
+   - https://git-scm.com/downloads
    - This is only needed if you are cloning the project from GitHub, but that makes it easier 
    to get updates while this is in development.
 
-After installing tools, close any open PowerShell windows, and open a new PowerShell 
-window. Then check:
+After installing tools, close any open terminal windows, and open a new terminal.
+
+On Windows, use PowerShell and check:
 
 ```powershell
 python --version
+uv --version
+node --version
+npm --version
+git --version
+```
+
+On macOS or Linux, use Terminal and check:
+
+```bash
+python3 --version
 uv --version
 node --version
 npm --version
@@ -51,11 +62,20 @@ Expected versions:
 
 ## Get The Project
 
-Open PowerShell and go to the folder where you want the project.
+Open a terminal and go to the folder where you want the project.
 
 If using Git:
 
+Windows PowerShell:
+
 ```powershell
+git clone https://github.com/JimmyBoomBots3000/Phag.git phag
+cd phag
+```
+
+macOS or Linux:
+
+```bash
 git clone https://github.com/JimmyBoomBots3000/Phag.git phag
 cd phag
 ```
@@ -65,6 +85,8 @@ If using a zip file, unzip it, then `cd` into the unzipped `phag` folder.
 ## First-Time Setup
 
 From the project root, install the backend dependencies:
+
+Windows PowerShell:
 
 ```powershell
 cd backend
@@ -78,18 +100,41 @@ cd ..\frontend
 npm install
 ```
 
+macOS or Linux:
+
+```bash
+cd backend
+uv sync
+```
+
+Then install the frontend dependencies:
+
+```bash
+cd ../frontend
+npm install
+```
+
 ## Run The App
 
-You need two PowerShell windows.
+You need two terminal windows.
 
 ### Window 1: Backend
 
 From the project root:
 
+Windows PowerShell:
+
 ```powershell
 cd backend
 $env:PHAG_DB_PATH = "..\dev.db"
 uv run phag serve --reload
+```
+
+macOS or Linux:
+
+```bash
+cd backend
+PHAG_DB_PATH=../dev.db uv run phag serve --reload
 ```
 
 Leave this window open. It should say the backend is running at:
@@ -102,7 +147,9 @@ http://127.0.0.1:8000
 
 From the project root:
 
-```powershell
+Windows PowerShell, macOS, or Linux:
+
+```text
 cd frontend
 npm run dev
 ```
@@ -129,21 +176,65 @@ Open that URL in your browser.
 Supported image types currently include common formats like JPG, JPEG, PNG,
 GIF, BMP, TIFF, and WebP.
 
+## Automated Tests
+
+From the project root, run the backend test suite:
+
+Windows PowerShell:
+
+```powershell
+cd backend
+uv run pytest
+```
+
+macOS or Linux:
+
+```bash
+cd backend
+uv run pytest
+```
+
+There is not currently a dedicated frontend test suite. To verify the frontend
+compiles, run:
+
+Windows PowerShell:
+
+```powershell
+cd frontend
+npm run build
+```
+
+macOS or Linux:
+
+```bash
+cd frontend
+npm run build
+```
+
 ## Where Data Goes
 
 The test setup creates:
+
+Windows:
 
 ```text
 dev.db
 thumbnails\
 ```
 
-These are local test data. If you want to reset the app, stop both PowerShell
+macOS or Linux:
+
+```text
+dev.db
+thumbnails/
+```
+
+These are local test data. If you want to reset the app, stop both terminal
 windows and delete `dev.db` and `thumbnails`.
 
 ## Stopping The App
 
-In each PowerShell window, press:
+In each terminal window, press:
 
 ```text
 Ctrl+C
@@ -155,6 +246,8 @@ If PowerShell asks whether to terminate the batch job, type `Y` and press Enter.
 
 After getting a newer copy of the project, run:
 
+Windows PowerShell:
+
 ```powershell
 cd backend
 uv sync
@@ -162,27 +255,46 @@ cd ..\frontend
 npm install
 ```
 
+macOS or Linux:
+
+```bash
+cd backend
+uv sync
+cd ../frontend
+npm install
+```
+
 Then start the backend and frontend again.
 
 ## Troubleshooting
 
-If `python`, `uv`, `node`, `npm`, or `git` is not recognized, close PowerShell
-and open a new one. If it still fails, that tool was not added to PATH during
-installation.
+If `python`, `python3`, `uv`, `node`, `npm`, or `git` is not recognized, close
+the terminal and open a new one. If it still fails, that tool was not added to
+PATH during installation.
 
 If `uv sync` fails because Python 3.12 is missing, install Python 3.12 and rerun
 the command.
 
 If `npm install` or `npm run dev` fails after changing machines or updating
-Node, delete `frontend\node_modules`, then run:
+Node, delete `frontend\node_modules` on Windows or `frontend/node_modules` on
+macOS or Linux, then run:
+
+Windows PowerShell:
 
 ```powershell
 cd frontend
 npm install
 ```
 
+macOS or Linux:
+
+```bash
+cd frontend
+npm install
+```
+
 If the browser app opens but cannot load images or tags, confirm the backend
-PowerShell window is still running and check:
+terminal window is still running and check:
 
 ```text
 http://127.0.0.1:8000/health

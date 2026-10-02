@@ -10,7 +10,7 @@ Point {app name} at one or more folders and it will index the images already the
 
 No imports. No proprietary library format. No rewriting metadata into your files.
 
-Your tags and library metadata live in a lightweight local database, while your original images stay exactly where you put them.
+Your tags and library metadata live in a lightweight local database, while your image files stay exactly where you put them.
 
 ## Organize with simple, flexible tags
 

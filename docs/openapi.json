@@ -68,12 +68,41 @@
             "format": "path",
             "title": "Path",
             "type": "string"
+          },
+          "recursive": {
+            "default": true,
+            "title": "Recursive",
+            "type": "boolean"
+          },
+          "replace_covered_roots": {
+            "default": false,
+            "title": "Replace Covered Roots",
+            "type": "boolean"
           }
         },
         "required": [
           "path"
         ],
         "title": "RootCreate",
+        "type": "object"
+      },
+      "RootUpdate": {
+        "description": "Request body for updating indexed root scan options.",
+        "properties": {
+          "recursive": {
+            "title": "Recursive",
+            "type": "boolean"
+          },
+          "replace_covered_roots": {
+            "default": false,
+            "title": "Replace Covered Roots",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "recursive"
+        ],
+        "title": "RootUpdate",
         "type": "object"
       },
       "ScanRequest": {
@@ -264,6 +293,19 @@
           },
           {
             "in": "query",
+            "name": "root_id",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "integer"
+              },
+              "title": "Root Id",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
             "name": "include_untagged",
             "required": false,
             "schema": {
@@ -354,6 +396,44 @@
           }
         },
         "summary": "Get Images"
+      }
+    },
+    "/images/{image_id}/file": {
+      "get": {
+        "description": "Serve one active source file for an indexed image.",
+        "operationId": "get_image_file_images__image_id__file_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "image_id",
+            "required": true,
+            "schema": {
+              "title": "Image Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Image File"
       }
     },
     "/images/{image_id}/tags": {
@@ -502,44 +582,6 @@
           }
         },
         "summary": "Untag Image"
-      }
-    },
-    "/originals/{image_id}": {
-      "get": {
-        "description": "Serve one active source file for an indexed image.",
-        "operationId": "get_original_originals__image_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "image_id",
-            "required": true,
-            "schema": {
-              "title": "Image Id",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Original"
       }
     },
     "/orphans/purge": {
@@ -712,9 +754,100 @@
           }
         },
         "summary": "Delete Root"
+      },
+      "patch": {
+        "description": "Update scan options for an indexed root.",
+        "operationId": "patch_root_roots__root_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "root_id",
+            "required": true,
+            "schema": {
+              "title": "Root Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RootUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Patch Root Roots  Root Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Root"
       }
     },
     "/scan-jobs": {
+      "delete": {
+        "description": "Cancel all queued or running scan jobs.",
+        "operationId": "cancel_scan_jobs_request_scan_jobs_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Scan Jobs Request Scan Jobs Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cancel Scan Jobs Request"
+      },
+      "get": {
+        "description": "Return all known scan jobs.",
+        "operationId": "get_scan_jobs_scan_jobs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Get Scan Jobs Scan Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Scan Jobs"
+      },
       "post": {
         "description": "Queue an indexing scan and return immediately.",
         "operationId": "create_scan_job_scan_jobs_post",
@@ -756,6 +889,46 @@
       }
     },
     "/scan-jobs/{job_id}": {
+      "delete": {
+        "description": "Cancel one queued or running scan job.",
+        "operationId": "cancel_scan_job_request_scan_jobs__job_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Scan Job Request Scan Jobs  Job Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Scan Job Request"
+      },
       "get": {
         "description": "Return background scan job status.",
         "operationId": "get_scan_job_status_scan_jobs__job_id__get",

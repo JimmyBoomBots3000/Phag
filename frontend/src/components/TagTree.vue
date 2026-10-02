@@ -9,19 +9,20 @@
           :aria-expanded="isExpanded(node.fullPath)"
           @click="toggleExpanded(node.fullPath)"
         >
-          {{ isExpanded(node.fullPath) ? "v" : ">" }}
+          <svg viewBox="0 0 24 24" aria-hidden="true" :class="{ expanded: isExpanded(node.fullPath) }">
+            <path d="m9 6 6 6-6 6"></path>
+          </svg>
         </button>
         <span v-else class="tag-disclosure-placeholder"></span>
 
-        <label v-if="node.tag">
+        <label>
           <input
-            :checked="selectedTags.includes(node.tag.display_name)"
+            :checked="selectedTags.includes(node.fullPath)"
             type="checkbox"
-            @change="toggleTag(node.tag.display_name)"
+            @change="toggleTag(node.fullPath)"
           />
-          <span>{{ node.name }}</span>
+          <span :class="{ 'tag-group': node.children.length }">{{ node.name }}</span>
         </label>
-        <span v-else class="tag-group">{{ node.name }}</span>
       </div>
 
       <TagTree

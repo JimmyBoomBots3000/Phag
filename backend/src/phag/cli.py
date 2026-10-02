@@ -158,7 +158,8 @@ def main() -> None:
             f"indexed {summary.indexed_count}; "
             f"skipped {summary.skipped_count} unchanged; "
             f"orphaned {summary.orphaned_count}; "
-            f"thumbnails {summary.thumbnail_count}"
+            f"thumbnails {summary.thumbnail_count}; "
+            f"failed {summary.failed_count}"
         )
         return
 
@@ -169,7 +170,8 @@ def main() -> None:
             f"indexed {summary.indexed_count}; "
             f"skipped {summary.skipped_count} unchanged; "
             f"orphaned {summary.orphaned_count}; "
-            f"thumbnails {summary.thumbnail_count}"
+            f"thumbnails {summary.thumbnail_count}; "
+            f"failed {summary.failed_count}"
         )
         return
 

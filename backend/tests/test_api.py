@@ -1,12 +1,15 @@
 from pathlib import Path
+from threading import Event
 from time import sleep
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
+import phag.scan_jobs as scan_jobs
 from phag.api import app, get_settings
 from phag.config import Settings
 from phag.db import init_database
+from phag.indexer import ScanCanceled
 
 
 def create_image(path: Path, size: tuple[int, int], color: str) -> None:
@@ -64,6 +67,129 @@ def test_roots_scan_images_and_tags(tmp_path: Path) -> None:
     assert len(filtered_response.json()) == 1
 
 
+def test_root_can_be_added_as_non_recursive(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    root_path = tmp_path / "images"
+    nested_path = root_path / "nested"
+    nested_path.mkdir(parents=True)
+    create_image(root_path / "blue.png", (20, 30), "blue")
+    create_image(nested_path / "red.png", (20, 30), "red")
+    client = make_client(db_path)
+
+    root_response = client.post("/roots", json={"path": str(root_path), "recursive": False})
+    scan_response = client.post("/scans", json={})
+    images_response = client.get("/images")
+
+    assert root_response.status_code == 201
+    assert root_response.json()["recursive"] is False
+    assert scan_response.json()["discovered_count"] == 1
+    assert [image["path_relative"] for image in images_response.json()] == ["blue.png"]
+
+
+def test_root_recursive_setting_can_be_updated(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    root_path = tmp_path / "images"
+    nested_path = root_path / "nested"
+    nested_path.mkdir(parents=True)
+    create_image(root_path / "blue.png", (20, 30), "blue")
+    create_image(nested_path / "red.png", (20, 30), "red")
+    client = make_client(db_path)
+
+    root = client.post("/roots", json={"path": str(root_path)}).json()
+    recursive_scan_response = client.post("/scans", json={})
+    update_response = client.patch(f"/roots/{root['id']}", json={"recursive": False})
+    non_recursive_scan_response = client.post("/scans", json={"root_path": str(root_path)})
+    images_response = client.get("/images")
+
+    assert recursive_scan_response.json()["discovered_count"] == 2
+    assert update_response.status_code == 200
+    assert update_response.json()["recursive"] is False
+    assert non_recursive_scan_response.json()["discovered_count"] == 1
+    assert non_recursive_scan_response.json()["orphaned_count"] == 1
+    assert [image["path_relative"] for image in images_response.json()] == ["blue.png"]
+
+
+def test_child_root_under_recursive_parent_is_rejected(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    parent_path = tmp_path / "images"
+    child_path = parent_path / "child"
+    child_path.mkdir(parents=True)
+    client = make_client(db_path)
+
+    client.post("/roots", json={"path": str(parent_path), "recursive": True})
+    response = client.post("/roots", json={"path": str(child_path), "recursive": True})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "root_already_covered"
+    assert response.json()["detail"]["covering_root"]["path"] == str(parent_path.resolve())
+
+
+def test_parent_root_can_replace_child_roots_after_confirmation(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    parent_path = tmp_path / "images"
+    child_path = parent_path / "child"
+    child_path.mkdir(parents=True)
+    client = make_client(db_path)
+
+    child_root = client.post("/roots", json={"path": str(child_path), "recursive": True}).json()
+    conflict_response = client.post("/roots", json={"path": str(parent_path), "recursive": True})
+    replace_response = client.post(
+        "/roots",
+        json={"path": str(parent_path), "recursive": True, "replace_covered_roots": True},
+    )
+    all_roots_response = client.get("/roots", params={"include_disabled": "true"})
+
+    assert conflict_response.status_code == 409
+    assert conflict_response.json()["detail"]["code"] == "covered_roots_require_confirmation"
+    assert conflict_response.json()["detail"]["covered_roots"][0]["id"] == child_root["id"]
+    assert replace_response.status_code == 201
+    assert {root["path"]: root["enabled"] for root in all_roots_response.json()} == {
+        str(child_path.resolve()): False,
+        str(parent_path.resolve()): True,
+    }
+
+
+def test_non_recursive_parent_can_have_child_root(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    parent_path = tmp_path / "images"
+    child_path = parent_path / "child"
+    child_path.mkdir(parents=True)
+    client = make_client(db_path)
+
+    parent_response = client.post("/roots", json={"path": str(parent_path), "recursive": False})
+    child_response = client.post("/roots", json={"path": str(child_path), "recursive": True})
+
+    assert parent_response.status_code == 201
+    assert child_response.status_code == 201
+
+
+def test_making_parent_recursive_can_replace_child_roots_after_confirmation(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    parent_path = tmp_path / "images"
+    child_path = parent_path / "child"
+    child_path.mkdir(parents=True)
+    client = make_client(db_path)
+
+    parent_root = client.post("/roots", json={"path": str(parent_path), "recursive": False}).json()
+    child_root = client.post("/roots", json={"path": str(child_path), "recursive": True}).json()
+    conflict_response = client.patch(f"/roots/{parent_root['id']}", json={"recursive": True})
+    replace_response = client.patch(
+        f"/roots/{parent_root['id']}",
+        json={"recursive": True, "replace_covered_roots": True},
+    )
+    all_roots_response = client.get("/roots", params={"include_disabled": "true"})
+
+    assert conflict_response.status_code == 409
+    assert conflict_response.json()["detail"]["code"] == "covered_roots_require_confirmation"
+    assert conflict_response.json()["detail"]["covered_roots"][0]["id"] == child_root["id"]
+    assert replace_response.status_code == 200
+    assert replace_response.json()["recursive"] is True
+    assert {root["path"]: root["enabled"] for root in all_roots_response.json()} == {
+        str(child_path.resolve()): False,
+        str(parent_path.resolve()): True,
+    }
+
+
 def test_images_can_filter_to_untagged(tmp_path: Path) -> None:
     db_path = tmp_path / "phag.db"
     root_path = tmp_path / "images"
@@ -90,6 +216,32 @@ def test_images_can_filter_to_untagged(tmp_path: Path) -> None:
     assert tagged_and_untagged_response.json() == []
 
 
+def test_images_can_filter_by_root(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    create_image(first_root / "blue.png", (20, 30), "blue")
+    create_image(second_root / "red.png", (20, 30), "red")
+    client = make_client(db_path)
+
+    first_root_response = client.post("/roots", json={"path": str(first_root)})
+    second_root_response = client.post("/roots", json={"path": str(second_root)})
+    client.post("/scans", json={})
+    first_images_response = client.get("/images", params={"root_id": first_root_response.json()["id"]})
+    both_images_response = client.get(
+        "/images",
+        params=[
+            ("root_id", first_root_response.json()["id"]),
+            ("root_id", second_root_response.json()["id"]),
+        ],
+    )
+
+    assert [image["path_relative"] for image in first_images_response.json()] == ["blue.png"]
+    assert [image["path_relative"] for image in both_images_response.json()] == ["blue.png", "red.png"]
+
+
 def test_scan_job_can_be_queued_and_polled(tmp_path: Path) -> None:
     db_path = tmp_path / "phag.db"
     root_path = tmp_path / "images"
@@ -103,6 +255,7 @@ def test_scan_job_can_be_queued_and_polled(tmp_path: Path) -> None:
     assert create_response.status_code == 202
     job = create_response.json()
     assert job["status"] in {"queued", "running", "completed"}
+    assert any(scan_job["id"] == job["id"] for scan_job in client.get("/scan-jobs").json())
 
     for _ in range(20):
         poll_response = client.get(f"/scan-jobs/{job['id']}")
@@ -116,6 +269,41 @@ def test_scan_job_can_be_queued_and_polled(tmp_path: Path) -> None:
     assert job["current_path"] == str(root_path)
     assert job["summary"]["indexed_count"] == 1
     assert client.get("/images").json()[0]["path_relative"] == "blue.png"
+
+
+def test_scan_jobs_can_be_canceled(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "phag.db"
+    started = Event()
+    client = make_client(db_path)
+
+    def wait_until_canceled(db_path, progress_callback=None, cancellation_callback=None):
+        started.set()
+        while not cancellation_callback():
+            sleep(0.01)
+        raise ScanCanceled
+
+    monkeypatch.setattr(scan_jobs, "index_roots_with_progress", wait_until_canceled)
+
+    running_job = client.post("/scan-jobs", json={}).json()
+    assert started.wait(timeout=1)
+    queued_job = client.post("/scan-jobs", json={}).json()
+
+    cancel_queued_response = client.delete(f"/scan-jobs/{queued_job['id']}")
+    cancel_all_response = client.delete("/scan-jobs")
+    unknown_response = client.delete("/scan-jobs/not-a-real-job")
+
+    assert cancel_queued_response.status_code == 200
+    assert cancel_queued_response.json()["status"] == "canceled"
+    assert cancel_all_response.status_code == 200
+    assert unknown_response.status_code == 404
+
+    for _ in range(20):
+        running_status = client.get(f"/scan-jobs/{running_job['id']}").json()
+        if running_status["status"] == "canceled":
+            break
+        sleep(0.05)
+
+    assert running_status["status"] == "canceled"
 
 
 def test_tags_can_be_renamed_and_deleted(tmp_path: Path) -> None:
@@ -205,7 +393,7 @@ def test_filesystem_directory_browser(tmp_path: Path) -> None:
     assert response.json()["directories"] == [str(child_path)]
 
 
-def test_thumbnail_and_original_routes(tmp_path: Path) -> None:
+def test_thumbnail_and_image_file_routes(tmp_path: Path) -> None:
     db_path = tmp_path / "phag.db"
     root_path = tmp_path / "images"
     root_path.mkdir()
@@ -217,8 +405,8 @@ def test_thumbnail_and_original_routes(tmp_path: Path) -> None:
     image = client.get("/images").json()[0]
 
     thumbnail_response = client.get(f"/{image['small_thumbnail_path']}")
-    original_response = client.get(f"/originals/{image['id']}")
+    image_file_response = client.get(f"/images/{image['id']}/file")
 
     assert thumbnail_response.status_code == 200
-    assert original_response.status_code == 200
+    assert image_file_response.status_code == 200
     assert thumbnail_response.headers["content-type"] == "image/webp"

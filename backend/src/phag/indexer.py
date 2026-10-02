@@ -15,7 +15,12 @@ from phag.file_locations import (
     upsert_file_location,
 )
 from phag.images import delete_unlocated_images, upsert_image
-from phag.indexed_roots import list_indexed_roots, mark_indexed_root_scanned, upsert_indexed_root
+from phag.indexed_roots import (
+    get_indexed_root_by_path,
+    list_enabled_indexed_roots,
+    mark_indexed_root_scanned,
+    upsert_indexed_root,
+)
 from phag.scan_events import add_scan_event
 from phag.scanner import discover_images, scan_discovered_image
 from phag.thumbnails import generate_thumbnails, upsert_thumbnail
@@ -30,6 +35,7 @@ class ScanSummary:
     skipped_count: int = 0
     orphaned_count: int = 0
     thumbnail_count: int = 0
+    failed_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -40,15 +46,21 @@ class PurgeSummary:
     purged_image_count: int = 0
 
 
-def index_path(db_path: Path, root_path: Path) -> ScanSummary:
+class ScanCanceled(Exception):
+    """Raised when a scan is canceled cooperatively."""
+
+
+def index_path(db_path: Path, root_path: Path, recursive: bool | None = None) -> ScanSummary:
     """Index one root folder into the database."""
-    return index_path_with_progress(db_path, root_path)
+    return index_path_with_progress(db_path, root_path, recursive=recursive)
 
 
 def index_path_with_progress(
     db_path: Path,
     root_path: Path,
+    recursive: bool | None = None,
     progress_callback: Callable[[Path], None] | None = None,
+    cancellation_callback: Callable[[], bool] | None = None,
 ) -> ScanSummary:
     """Index one root folder and optionally report the current directory."""
     root_path = root_path.expanduser().resolve()
@@ -56,14 +68,25 @@ def index_path_with_progress(
     indexed_count = 0
     skipped_count = 0
     thumbnail_count = 0
+    failed_count = 0
     seen_path_relatives: set[str] = set()
     app_data_dir = db_path.expanduser().resolve().parent
 
+    def raise_if_canceled() -> None:
+        if cancellation_callback and cancellation_callback():
+            raise ScanCanceled
+
+    raise_if_canceled()
     if progress_callback:
         progress_callback(root_path)
 
     with connect(db_path) as connection:
-        root_id = upsert_indexed_root(connection, root_path)
+        existing_root = get_indexed_root_by_path(connection, root_path)
+        effective_recursive = recursive
+        if effective_recursive is None:
+            effective_recursive = bool(existing_root["recursive"]) if existing_root else True
+
+        root_id = upsert_indexed_root(connection, root_path, recursive=effective_recursive)
         add_scan_event(
             connection=connection,
             root_id=root_id,
@@ -71,37 +94,74 @@ def index_path_with_progress(
             path=root_path,
         )
 
-        for discovered_image in discover_images(root_path):
-            if progress_callback:
-                progress_callback(discovered_image.path.parent)
+        try:
+            for discovered_image in discover_images(root_path, recursive=effective_recursive):
+                raise_if_canceled()
+                if progress_callback:
+                    progress_callback(discovered_image.path.parent)
 
-            discovered_count += 1
-            seen_path_relatives.add(path_relative_to_root(root_path, discovered_image.path))
+                discovered_count += 1
+                path_relative = path_relative_to_root(root_path, discovered_image.path)
 
-            if is_unchanged_file_location(
+                if is_unchanged_file_location(
+                    connection=connection,
+                    root_id=root_id,
+                    root_path=root_path,
+                    image_path=discovered_image.path,
+                    file_size_bytes=discovered_image.file_size_bytes,
+                    modified_time=discovered_image.modified_time,
+                ):
+                    skipped_count += 1
+                    seen_path_relatives.add(path_relative)
+                    continue
+
+                raise_if_canceled()
+                try:
+                    scanned_image = scan_discovered_image(discovered_image)
+                    thumbnails = generate_thumbnails(app_data_dir, scanned_image)
+                except Exception as exc:
+                    failed_count += 1
+                    add_scan_event(
+                        connection=connection,
+                        root_id=root_id,
+                        event_type="image_scan_failed",
+                        path=discovered_image.path,
+                        details={"error": str(exc)},
+                    )
+                    continue
+                raise_if_canceled()
+                image_id = upsert_image(connection, scanned_image)
+                upsert_file_location(
+                    connection=connection,
+                    root_id=root_id,
+                    root_path=root_path,
+                    image_id=image_id,
+                    scanned_image=scanned_image,
+                )
+                for thumbnail in thumbnails:
+                    raise_if_canceled()
+                    upsert_thumbnail(connection, image_id, thumbnail)
+                    thumbnail_count += 1
+                indexed_count += 1
+                seen_path_relatives.add(path_relative)
+
+            raise_if_canceled()
+        except ScanCanceled:
+            add_scan_event(
                 connection=connection,
                 root_id=root_id,
-                root_path=root_path,
-                image_path=discovered_image.path,
-                file_size_bytes=discovered_image.file_size_bytes,
-                modified_time=discovered_image.modified_time,
-            ):
-                skipped_count += 1
-                continue
-
-            scanned_image = scan_discovered_image(discovered_image)
-            image_id = upsert_image(connection, scanned_image)
-            upsert_file_location(
-                connection=connection,
-                root_id=root_id,
-                root_path=root_path,
-                image_id=image_id,
-                scanned_image=scanned_image,
+                event_type="scan_canceled",
+                path=root_path,
+                details={
+                    "discovered_count": discovered_count,
+                    "indexed_count": indexed_count,
+                    "skipped_count": skipped_count,
+                    "thumbnail_count": thumbnail_count,
+                    "failed_count": failed_count,
+                },
             )
-            for thumbnail in generate_thumbnails(app_data_dir, scanned_image):
-                upsert_thumbnail(connection, image_id, thumbnail)
-                thumbnail_count += 1
-            indexed_count += 1
+            connection.commit()
+            raise
 
         orphaned_count = mark_missing_file_locations_orphaned(
             connection,
@@ -116,6 +176,7 @@ def index_path_with_progress(
             skipped_count=skipped_count,
             orphaned_count=orphaned_count,
             thumbnail_count=thumbnail_count,
+            failed_count=failed_count,
         )
         add_scan_event(
             connection=connection,
@@ -128,6 +189,7 @@ def index_path_with_progress(
                 "skipped_count": summary.skipped_count,
                 "orphaned_count": summary.orphaned_count,
                 "thumbnail_count": summary.thumbnail_count,
+                "failed_count": summary.failed_count,
             },
         )
 
@@ -142,6 +204,7 @@ def index_roots(db_path: Path) -> ScanSummary:
 def index_roots_with_progress(
     db_path: Path,
     progress_callback: Callable[[Path], None] | None = None,
+    cancellation_callback: Callable[[], bool] | None = None,
 ) -> ScanSummary:
     """Index every enabled root and optionally report the current directory."""
     discovered_count = 0
@@ -149,14 +212,24 @@ def index_roots_with_progress(
     skipped_count = 0
     orphaned_count = 0
     thumbnail_count = 0
+    failed_count = 0
 
-    for root_path in list_indexed_roots(db_path):
-        summary = index_path_with_progress(db_path, root_path, progress_callback)
+    for root in list_enabled_indexed_roots(db_path):
+        if cancellation_callback and cancellation_callback():
+            raise ScanCanceled
+        summary = index_path_with_progress(
+            db_path,
+            root.path,
+            root.recursive,
+            progress_callback,
+            cancellation_callback,
+        )
         discovered_count += summary.discovered_count
         indexed_count += summary.indexed_count
         skipped_count += summary.skipped_count
         orphaned_count += summary.orphaned_count
         thumbnail_count += summary.thumbnail_count
+        failed_count += summary.failed_count
 
     return ScanSummary(
         discovered_count=discovered_count,
@@ -164,6 +237,7 @@ def index_roots_with_progress(
         skipped_count=skipped_count,
         orphaned_count=orphaned_count,
         thumbnail_count=thumbnail_count,
+        failed_count=failed_count,
     )
 
 

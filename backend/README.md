@@ -42,9 +42,13 @@ Core endpoints:
 - `GET /health`
 - `GET /roots`
 - `POST /roots`
+- `PATCH /roots/{root_id}`
 - `POST /scans`
 - `POST /scan-jobs`
+- `GET /scan-jobs`
 - `GET /scan-jobs/{job_id}`
+- `DELETE /scan-jobs/{job_id}`
+- `DELETE /scan-jobs`
 - `GET /images`
 - `GET /tags`
 - `POST /tags`
@@ -53,7 +57,7 @@ Core endpoints:
 - `POST /images/{image_id}/tags`
 - `DELETE /images/{image_id}/tags/{tag_id}`
 - `GET /thumbnails/{size}/{prefix}/{filename}`
-- `GET /originals/{image_id}`
+- `GET /images/{image_id}/file`
 
 ## Tests
 
