@@ -27,7 +27,7 @@ Use whatever structure makes sense to you:
 - `reference/design`
 
 Slash-separated tags can be treated as a hierarchy without forcing you into
-albums, collections, or a rigid folder structure.
+albums, collections, or a rigid folder structure. Add as many or as few tags to an image as you like.
 
 ## Browse Visually
 
