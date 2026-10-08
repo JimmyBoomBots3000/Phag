@@ -683,12 +683,18 @@ dd {
   color: var(--text-muted);
 }
 
-.image-file-link {
+.image-action-row {
+  align-items: center;
   border-top: 1px solid var(--border-soft);
-  color: var(--brand);
-  display: block;
+  display: flex;
+  gap: 8px;
   margin-top: 12px;
   padding-top: 12px;
+}
+
+.image-file-link {
+  color: var(--brand);
+  font-size: var(--font-ui);
 }
 
 .tag-count-link {
@@ -729,9 +735,20 @@ dd {
   width: min(720px, 100%);
 }
 
+.compact-modal {
+  max-width: 460px;
+}
+
 .modal h2,
 .modal h3 {
   color: var(--text);
+}
+
+.modal-copy {
+  color: var(--text);
+  font-size: var(--font-ui);
+  line-height: 1.45;
+  margin: 0 0 10px;
 }
 
 .modal-header,
@@ -740,6 +757,13 @@ dd {
   display: flex;
   gap: 8px;
   justify-content: space-between;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 .chooser-path {

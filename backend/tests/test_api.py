@@ -410,3 +410,111 @@ def test_thumbnail_and_image_file_routes(tmp_path: Path) -> None:
     assert thumbnail_response.status_code == 200
     assert image_file_response.status_code == 200
     assert thumbnail_response.headers["content-type"] == "image/webp"
+
+
+def test_image_can_be_moved_to_indexed_folder_and_keeps_tags(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    root_path = tmp_path / "images"
+    destination_path = root_path / "sorted"
+    destination_path.mkdir(parents=True)
+    source_path = root_path / "blue.png"
+    create_image(source_path, (20, 30), "blue")
+    client = make_client(db_path)
+
+    client.post("/roots", json={"path": str(root_path), "recursive": True})
+    client.post("/scans", json={})
+    image = client.get("/images").json()[0]
+    client.post(f"/images/{image['id']}/tags", json={"name": "color/blue"})
+
+    response = client.post(
+        f"/images/{image['id']}/move",
+        json={"destination_directory": str(destination_path)},
+    )
+    moved_images = client.get("/images").json()
+    tags = client.get(f"/images/{image['id']}/tags").json()
+
+    assert response.status_code == 200
+    assert not source_path.exists()
+    assert (destination_path / "blue.png").is_file()
+    assert response.json()["path_relative"] == "sorted/blue.png"
+    assert response.json()["indexed"] is True
+    assert moved_images[0]["path_relative"] == "sorted/blue.png"
+    assert tags[0]["display_name"] == "color/blue"
+
+
+def test_image_move_rejects_unindexed_destination(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    root_path = tmp_path / "images"
+    destination_path = tmp_path / "outside"
+    root_path.mkdir()
+    destination_path.mkdir()
+    create_image(root_path / "blue.png", (20, 30), "blue")
+    client = make_client(db_path)
+
+    client.post("/roots", json={"path": str(root_path), "recursive": True})
+    client.post("/scans", json={})
+    image = client.get("/images").json()[0]
+
+    response = client.post(
+        f"/images/{image['id']}/move",
+        json={"destination_directory": str(destination_path)},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Destination is not inside an indexed folder"
+    assert (root_path / "blue.png").is_file()
+
+
+def test_image_move_can_allow_unindexed_destination(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    root_path = tmp_path / "images"
+    destination_path = tmp_path / "outside"
+    source_path = root_path / "blue.png"
+    root_path.mkdir()
+    destination_path.mkdir()
+    create_image(source_path, (20, 30), "blue")
+    client = make_client(db_path)
+
+    client.post("/roots", json={"path": str(root_path), "recursive": True})
+    client.post("/scans", json={})
+    image = client.get("/images").json()[0]
+    client.post(f"/images/{image['id']}/tags", json={"name": "color/blue"})
+
+    response = client.post(
+        f"/images/{image['id']}/move",
+        json={"destination_directory": str(destination_path), "allow_unindexed": True},
+    )
+    images_response = client.get("/images")
+    tags_response = client.get(f"/images/{image['id']}/tags")
+
+    assert response.status_code == 200
+    assert response.json()["indexed"] is False
+    assert response.json()["root_id"] is None
+    assert response.json()["path_relative"] is None
+    assert not source_path.exists()
+    assert (destination_path / "blue.png").is_file()
+    assert images_response.json() == []
+    assert tags_response.json()[0]["display_name"] == "color/blue"
+
+
+def test_image_move_rejects_existing_destination_file(tmp_path: Path) -> None:
+    db_path = tmp_path / "phag.db"
+    root_path = tmp_path / "images"
+    destination_path = root_path / "sorted"
+    destination_path.mkdir(parents=True)
+    source_path = root_path / "blue.png"
+    create_image(source_path, (20, 30), "blue")
+    create_image(destination_path / "blue.png", (20, 30), "red")
+    client = make_client(db_path)
+
+    client.post("/roots", json={"path": str(root_path), "recursive": True})
+    client.post("/scans", json={})
+    image = next(image for image in client.get("/images").json() if image["path_relative"] == "blue.png")
+
+    response = client.post(
+        f"/images/{image['id']}/move",
+        json={"destination_directory": str(destination_path)},
+    )
+
+    assert response.status_code == 409
+    assert source_path.is_file()

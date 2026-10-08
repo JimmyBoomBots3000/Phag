@@ -69,6 +69,15 @@ export interface DirectoryListing {
   directories: string[];
 }
 
+export interface MovedImage {
+  image_id: number;
+  source_path: string;
+  destination_path: string;
+  root_id: number | null;
+  path_relative: string | null;
+  indexed: boolean;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -137,6 +146,13 @@ export function listDirectories(path?: string): Promise<DirectoryListing> {
 export function removeRoot(rootId: number): Promise<{ removed_count: number; deleted_tag_count: number }> {
   return request<{ removed_count: number; deleted_tag_count: number }>(`/roots/${rootId}`, {
     method: "DELETE"
+  });
+}
+
+export function moveImage(imageId: number, destinationDirectory: string, allowUnindexed = false): Promise<MovedImage> {
+  return request<MovedImage>(`/images/${imageId}/move`, {
+    method: "POST",
+    body: JSON.stringify({ destination_directory: destinationDirectory, allow_unindexed: allowUnindexed })
   });
 }
 

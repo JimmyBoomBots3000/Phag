@@ -149,6 +149,21 @@ Lists active library images. Supported query parameters:
 
 Serves one active source file for an indexed image.
 
+`POST /images/{image_id}/move`
+
+Moves one active source file into a destination directory. If the destination
+is covered by an enabled indexed root, the active file location is updated and
+the image remains visible in the library. If `allow_unindexed` is true, the file
+can move outside indexed roots; the image then drops out of active library
+views until that destination is added as an indexed root and scanned.
+
+```json
+{
+  "destination_directory": "/Users/example/Pictures/Sorted",
+  "allow_unindexed": false
+}
+```
+
 ### Tags
 
 `GET /tags`

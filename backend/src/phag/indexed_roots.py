@@ -220,6 +220,20 @@ def find_covered_roots(
     return covered_roots
 
 
+def find_indexed_root_covering_file(conn: sqlite3.Connection, file_path: Path) -> IndexedRoot | None:
+    """Return the enabled indexed root that would include a file path."""
+    file_path = file_path.expanduser().resolve()
+    parent_path = file_path.parent
+    for root in iter_enabled_root_overlaps(conn):
+        try:
+            parent_path.relative_to(root.path)
+        except ValueError:
+            continue
+        if root.recursive or parent_path == root.path:
+            return IndexedRoot(id=root.id, path=root.path, recursive=root.recursive)
+    return None
+
+
 def disable_covered_roots(
     conn: sqlite3.Connection,
     root_path: Path,

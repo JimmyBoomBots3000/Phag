@@ -48,6 +48,26 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "ImageMoveRequest": {
+        "description": "Request body for moving one indexed image file.",
+        "properties": {
+          "allow_unindexed": {
+            "default": false,
+            "title": "Allow Unindexed",
+            "type": "boolean"
+          },
+          "destination_directory": {
+            "format": "path",
+            "title": "Destination Directory",
+            "type": "string"
+          }
+        },
+        "required": [
+          "destination_directory"
+        ],
+        "title": "ImageMoveRequest",
+        "type": "object"
+      },
       "PurgeRequest": {
         "description": "Request body for orphan metadata cleanup.",
         "properties": {
@@ -434,6 +454,58 @@
           }
         },
         "summary": "Get Image File"
+      }
+    },
+    "/images/{image_id}/move": {
+      "post": {
+        "description": "Move one active image file into a destination directory.",
+        "operationId": "move_image_images__image_id__move_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "image_id",
+            "required": true,
+            "schema": {
+              "title": "Image Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageMoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Move Image Images  Image Id  Move Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Move Image"
       }
     },
     "/images/{image_id}/tags": {

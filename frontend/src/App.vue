@@ -139,15 +139,18 @@
           </ul>
         </section>
 
-        <a
-          v-if="hasSingleSelectedImage"
-          class="image-file-link"
-          :href="assetUrl(`images/${selectedImage.id}/file`)"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Open Image
-        </a>
+        <div class="image-action-row">
+          <button type="button" class="small-button" @click="openMoveChooser">Move To</button>
+          <a
+            v-if="hasSingleSelectedImage"
+            class="image-file-link"
+            :href="assetUrl(`images/${selectedImage.id}/file`)"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open Image
+          </a>
+        </div>
       </template>
       <div v-else class="empty-details">
         <p class="muted">Select one or more images</p>
@@ -307,6 +310,60 @@
     </section>
   </div>
 
+  <div v-if="moveChooserOpen" class="modal-backdrop">
+    <section class="modal">
+      <header class="modal-header">
+        <h2>Move Images</h2>
+        <button type="button" class="small-button" @click="moveChooserOpen = false">Close</button>
+      </header>
+      <p v-if="moveChooserErrorMessage" class="modal-error">{{ moveChooserErrorMessage }}</p>
+      <p class="muted">{{ moveChooserSummary }}</p>
+      <div class="chooser-path">{{ moveDirectoryListing?.path }}</div>
+      <div class="chooser-actions">
+        <button
+          type="button"
+          class="small-button"
+          :disabled="!moveDirectoryListing?.parent_path"
+          @click="browseMoveDirectory(moveDirectoryListing?.parent_path ?? undefined)"
+        >
+          Up
+        </button>
+        <button type="button" class="small-button" :disabled="!moveDirectoryListing" @click="handleMoveSelectedImages">
+          Move Here
+        </button>
+      </div>
+      <ul class="directory-list">
+        <li v-for="directory in moveDirectoryListing?.directories ?? []" :key="directory">
+          <button type="button" class="text-button" @click="browseMoveDirectory(directory)">
+            {{ baseName(directory) }}
+          </button>
+        </li>
+      </ul>
+    </section>
+  </div>
+
+  <div v-if="untrackedMovePromptOpen" class="modal-backdrop">
+    <section class="modal compact-modal">
+      <header class="modal-header">
+        <h2>Track Destination?</h2>
+      </header>
+      <p class="modal-copy">
+        Phag is not tracking the destination folder. Add it to Library Roots before moving?
+        Choose No to move anyway; the image will leave the library view until this folder is tracked.
+      </p>
+      <div class="chooser-path">{{ pendingMoveDestination }}</div>
+      <label class="option-row">
+        <input v-model="pendingMoveRecursive" type="checkbox" />
+        <span>Scan subfolders recursively</span>
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="small-button" @click="handleTrackedMoveChoice">Yes</button>
+        <button type="button" class="small-button" @click="handleUntrackedMoveChoice">No</button>
+        <button type="button" class="small-button" @click="cancelPendingMove">Cancel</button>
+      </div>
+    </section>
+  </div>
+
   <div v-if="tagManagerOpen" class="modal-backdrop">
     <section class="modal">
       <header class="modal-header">
@@ -349,6 +406,7 @@ import {
   listRoots,
   listScanJobs,
   listTags,
+  moveImage,
   queueScan,
   renameTag,
   removeRoot,
@@ -398,6 +456,13 @@ const rootChooserRecursive = ref(true);
 const rootChooserErrorMessage = ref("");
 const settingsErrorMessage = ref("");
 const directoryListing = ref<DirectoryListing | null>(null);
+const moveChooserOpen = ref(false);
+const moveChooserErrorMessage = ref("");
+const moveDirectoryListing = ref<DirectoryListing | null>(null);
+const untrackedMovePromptOpen = ref(false);
+const pendingMoveRecursive = ref(true);
+const pendingMoveDestination = ref("");
+const pendingMoveImages = ref<LibraryImage[]>([]);
 const tagManagerOpen = ref(false);
 const editingTagId = ref<number | null>(null);
 const editingTagName = ref("");
@@ -430,6 +495,9 @@ const partialSelectedTags = computed(() =>
 );
 const detailTitle = computed(() =>
   selectedImages.value.length > 1 ? `${selectedImages.value.length} images selected` : selectedImage.value?.path_relative
+);
+const moveChooserSummary = computed(() =>
+  selectedImages.value.length === 1 ? selectedImage.value?.path_relative : `${selectedImages.value.length} images selected`
 );
 const activeScanJobs = computed(() => scanJobs.value.filter(isActiveScan));
 const latestScanJob = computed(() => activeScanJobs.value[0] ?? latestFinishedScanJob.value);
@@ -473,6 +541,18 @@ async function withRootChooserErrors(work: () => Promise<void>): Promise<void> {
     await work();
   } catch (error) {
     rootChooserErrorMessage.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function withMoveChooserErrors(work: () => Promise<void>): Promise<void> {
+  moveChooserErrorMessage.value = "";
+  busy.value = true;
+  try {
+    await work();
+  } catch (error) {
+    moveChooserErrorMessage.value = error instanceof Error ? error.message : String(error);
   } finally {
     busy.value = false;
   }
@@ -608,6 +688,121 @@ async function browseDirectory(path?: string): Promise<void> {
   await withRootChooserErrors(async () => {
     directoryListing.value = await listDirectories(path);
   });
+}
+
+async function browseMoveDirectory(path?: string): Promise<void> {
+  await withMoveChooserErrors(async () => {
+    moveDirectoryListing.value = await listDirectories(path);
+  });
+}
+
+async function openMoveChooser(): Promise<void> {
+  if (!selectedImages.value.length) return;
+  moveChooserOpen.value = true;
+  moveChooserErrorMessage.value = "";
+  await browseMoveDirectory();
+}
+
+async function handleMoveSelectedImages(): Promise<void> {
+  const destinationDirectory = moveDirectoryListing.value?.path;
+  const imagesToMove = [...selectedImages.value];
+  if (!destinationDirectory || !imagesToMove.length) return;
+
+  if (!isDirectoryIndexed(destinationDirectory)) {
+    pendingMoveDestination.value = destinationDirectory;
+    pendingMoveImages.value = imagesToMove;
+    pendingMoveRecursive.value = true;
+    untrackedMovePromptOpen.value = true;
+    return;
+  }
+
+  await performMove(imagesToMove, destinationDirectory, false);
+}
+
+async function handleTrackedMoveChoice(): Promise<void> {
+  const destinationDirectory = pendingMoveDestination.value;
+  const imagesToMove = [...pendingMoveImages.value];
+  if (!destinationDirectory || !imagesToMove.length) return;
+
+  untrackedMovePromptOpen.value = false;
+  await withMoveChooserErrors(async () => {
+    const added = await addRootWithOverlapConfirmation(destinationDirectory, pendingMoveRecursive.value);
+    if (!added) {
+      restorePendingMove(destinationDirectory, imagesToMove);
+      return;
+    }
+    await loadLibraryState();
+    await moveImages(imagesToMove, destinationDirectory, false);
+    await startQueuedScan(destinationDirectory);
+    clearPendingMove();
+    moveChooserOpen.value = false;
+    await refreshTagsAndImages();
+  });
+}
+
+async function handleUntrackedMoveChoice(): Promise<void> {
+  const destinationDirectory = pendingMoveDestination.value;
+  const imagesToMove = [...pendingMoveImages.value];
+  if (!destinationDirectory || !imagesToMove.length) return;
+
+  untrackedMovePromptOpen.value = false;
+  await performMove(imagesToMove, destinationDirectory, true);
+}
+
+function cancelPendingMove(): void {
+  untrackedMovePromptOpen.value = false;
+  clearPendingMove();
+}
+
+async function performMove(
+  imagesToMove: LibraryImage[],
+  destinationDirectory: string,
+  allowUnindexed: boolean,
+): Promise<void> {
+  await withMoveChooserErrors(async () => {
+    await moveImages(imagesToMove, destinationDirectory, allowUnindexed);
+    clearPendingMove();
+    moveChooserOpen.value = false;
+    await refreshTagsAndImages();
+  });
+}
+
+async function moveImages(
+  imagesToMove: LibraryImage[],
+  destinationDirectory: string,
+  allowUnindexed: boolean,
+): Promise<void> {
+  for (const image of imagesToMove) {
+    await moveImage(image.id, destinationDirectory, allowUnindexed);
+  }
+}
+
+function restorePendingMove(destinationDirectory: string, imagesToMove: LibraryImage[]): void {
+  pendingMoveDestination.value = destinationDirectory;
+  pendingMoveImages.value = imagesToMove;
+  untrackedMovePromptOpen.value = true;
+}
+
+function clearPendingMove(): void {
+  pendingMoveDestination.value = "";
+  pendingMoveImages.value = [];
+}
+
+function isDirectoryIndexed(directory: string): boolean {
+  const normalizedDirectory = normalizePath(directory);
+  return roots.value.some((root) => {
+    if (!root.enabled) return false;
+    const normalizedRoot = normalizePath(root.path);
+    return root.recursive ? isSameOrChildPath(normalizedDirectory, normalizedRoot) : normalizedDirectory === normalizedRoot;
+  });
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
+function isSameOrChildPath(path: string, parentPath: string): boolean {
+  return path === parentPath || path.startsWith(`${parentPath}/`) || path.startsWith(`${parentPath}\\`);
 }
 
 async function handleAddSelectedRoot(): Promise<void> {

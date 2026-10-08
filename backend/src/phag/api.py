@@ -26,6 +26,7 @@ from phag.indexed_roots import (
 )
 from phag.indexer import index_path, index_roots, purge_orphans
 from phag.library import list_library_images
+from phag.mover import move_image_file
 from phag.scan_jobs import (
     cancel_all_scan_jobs,
     cancel_scan_job,
@@ -104,6 +105,13 @@ class PurgeRequest(BaseModel):
     """Request body for orphan metadata cleanup."""
 
     retention_days: int = Field(default=3, ge=0)
+
+
+class ImageMoveRequest(BaseModel):
+    """Request body for moving one indexed image file."""
+
+    destination_directory: Path
+    allow_unindexed: bool = False
 
 
 class DirectoryListingResponse(BaseModel):
@@ -330,6 +338,42 @@ def get_image_tags(image_id: int, settings: Settings = Depends(get_settings)) ->
     """List tags for one image."""
     with connect(settings.db_path) as connection:
         return [tag.__dict__ for tag in list_image_tags(connection, image_id)]
+
+
+@app.post("/images/{image_id}/move")
+def move_image(
+    image_id: int,
+    request: ImageMoveRequest,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    """Move one active image file into a destination directory."""
+    try:
+        with connect(settings.db_path) as connection:
+            moved = move_image_file(
+                connection,
+                image_id,
+                request.destination_directory,
+                allow_unindexed=request.allow_unindexed,
+            )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except NotADirectoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        if str(exc) == "destination_not_indexed":
+            raise HTTPException(status_code=400, detail="Destination is not inside an indexed folder") from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "image_id": moved.image_id,
+        "source_path": str(moved.source_path),
+        "destination_path": str(moved.destination_path),
+        "root_id": moved.root_id,
+        "path_relative": moved.path_relative,
+        "indexed": moved.indexed,
+    }
 
 
 @app.post("/images/{image_id}/tags", status_code=201)
