@@ -1,4 +1,60 @@
-# Phag Test Setup
+<img src="./phag-logo.svg" alt="Phag" width="300">
+
+**Tag your images. Keep your files where they are.**
+
+Phag is a self-hosted image tagging and browsing tool for organizing photo and
+image libraries without moving, renaming, or modifying your files unless you choose to.
+
+## Your Images Stay Yours
+
+Point Phag at one or more folders and it will index the images already there.
+
+No imports. No proprietary library format. No rewriting metadata into your
+files.
+
+Your tags and library metadata live in a lightweight local database, while your
+image files stay exactly where you put them.
+
+## Organize With Simple, Flexible Tags
+
+Tags are just tags.
+
+Use whatever structure makes sense to you:
+
+- `people/family/alice`
+- `projects/website`
+- `places/pittsburgh`
+- `reference/design`
+
+Slash-separated tags can be treated as a hierarchy without forcing you into
+albums, collections, or a rigid folder structure.
+
+## Browse Visually
+
+Search and filter your library from a fast thumbnail grid.
+
+Select multiple tags, combine them with AND or OR logic, and narrow large
+libraries down quickly.
+
+Need to tag a group of images at once? Select them and apply tags in bulk.
+
+## Built For Self-Hosting
+
+Phag runs as a service on your own machine.
+
+Your browser is the client. Your filesystem is the image store. Your metadata
+stays under your control.
+
+No cloud account required.
+
+## Designed To Grow
+
+The initial focus is simple: indexing, browsing, searching, and manual tagging.
+
+Future extensions can add things like automatic tag suggestions and image
+analysis without changing the core library model.
+
+## Test Setup
 
 Phag is a local photo tagging app. For this test version, it runs like a small
 developer project instead of a normal installed app.
@@ -173,8 +229,7 @@ Open that URL in your browser.
 7. Try renaming or deleting tags.
 8. Remove a folder and confirm its images disappear.
 
-Supported image types currently include common formats like JPG, JPEG, PNG,
-GIF, BMP, TIFF, and WebP.
+Supported image types currently include JPG, JPEG, PNG, and WebP.
 
 ## Automated Tests
 
