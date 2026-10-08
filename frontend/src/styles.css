@@ -257,16 +257,8 @@ h2 {
   fill: var(--logo-primary);
 }
 
-.logo-secondary {
-  fill: var(--logo-secondary);
-}
-
 .logo-orange {
   fill: var(--brand);
-}
-
-.logo-orange-dark {
-  fill: var(--brand-dark);
 }
 
 .title-actions {
